@@ -3,6 +3,7 @@ import connection from "../database/db";
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import { generateAccessToken, generateRefreshToken } from "../utils/token.util";
+import { sanitizeUser } from "../helper/sanitizeUser";
 
 export const SignIn = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
@@ -68,9 +69,11 @@ export const SignIn = async (req:Request,res:Response) => {
         )
 
 
+
+
         return res.status(200).json({
             success: true,
-            user,
+            user : sanitizeUser(user),
             accessToken,
             refreshToken,
         });
