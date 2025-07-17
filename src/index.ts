@@ -1,13 +1,17 @@
 import express from "express";
 import dotenv from "dotenv";
+import cors from "cors"
 import connection from "./database/db";
-dotenv.config();
 import redis from "./database/redis";
 import "./workers/userImage.worker";
 
 //local routes
 import roleRoutes from "./routes/roles.routes";
 import userRoutes from './routes/user.routes'
+import authRoutes from "./routes/auth.routes";
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -27,9 +31,18 @@ redis.on("error", (err) => {
   console.error("❌ Redis error:", err);
 });
 
+const corsOptions: cors.CorsOptions = {
+  origin: ['http://localhost:3000'],
+  methods: ['GET', 'POST', 'PUT','DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true, 
+  optionsSuccessStatus: 204,
+};
+
 //global middlewares
+app.use(cors(corsOptions))
 app.use(express.json());
-app.use(express.urlencoded())
+app.use(express.urlencoded({ extended: true }));
 
 app.get("/",(req,res)=>{
   res.send("Welcome to CRM API")
@@ -38,20 +51,22 @@ app.get("/",(req,res)=>{
 //routes middlewares
 app.use('/roles',roleRoutes);
 app.use('/users',userRoutes);
+app.use('/auth',authRoutes);
 
-// Optional: check DB connection (once) at startup
+
+// Start server only if DB is reachable
 (async () => {
   try {
-    const conn = await connection.getConnection(); // ✅ get a connection from the pool
+    const conn = await connection.getConnection();
+    conn.release();
     console.log("✅ Connected to MySQL database");
-    conn.release(); // release immediately
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+    });
   } catch (err) {
-    console.error("❌ Failed to connect to the database:", err);
-    process.exit(1); // shut down app if DB is not ready
+    console.error("❌ Failed to connect to MySQL:", err);
+    process.exit(1);
   }
 })();
 
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});

@@ -21,7 +21,7 @@ export const getAllUsers = async(req:Request,res:Response) => {
         }
 
         const [rows] : any = await conn.query(
-            `SELECT * from users`
+            `SELECT id, name, email, phoneNumber, roleId, status, profileImage FROM users`
         )
 
         if(rows.length === 0){
