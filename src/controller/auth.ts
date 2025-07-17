@@ -22,7 +22,7 @@ export const SignIn = async (req:Request,res:Response) => {
 
         if(rows.length === 0){
             return res.status(404).json({
-                message : "User Not Exist. Please Sign Up First"
+                message : "User Not Exist"
             })
         }
 
