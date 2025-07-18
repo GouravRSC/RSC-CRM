@@ -49,6 +49,42 @@ export const getAllUsers = async(req:Request,res:Response) => {
 }
 
 
+export const getUserById = async (req: Request, res: Response) => {
+    const conn = await connection.getConnection();
+    try {
+        const { id } = req.params;
+
+        const [rows]: any = await conn.query(
+            `SELECT id, name, email, phoneNumber, roleId, status, profileImage 
+             FROM users WHERE id = ? LIMIT 1`,
+            [id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found",
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "User fetched successfully",
+            data: rows[0],
+        });
+
+    } catch (error: any) {
+        return res.status(500).json({
+            success: false,
+            message: `Error fetching user: ${error.message}`,
+        });
+    } finally {
+        if (conn) conn.release();
+    }
+};
+
+
+
 export const addUser = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
     try{
@@ -182,7 +218,7 @@ export const updateUser = async (req:Request,res:Response) => {
         if (userCountRows[0].count === 0) {
             return res.status(404).json({
                 success: false,
-                message: "User Not Found With The Given ID",
+                message: "User Not Found.",
             });
         }
 
@@ -222,13 +258,22 @@ export const updateUser = async (req:Request,res:Response) => {
                     await cloudinary.uploader.destroy(publicId);
                 }
             }
+        }else{
+            profileImage = oldImageUrl;
         } 
+
+
+        // Hash password only if provided
+        let hashedPassword: string | undefined;
+        if (password) {
+            hashedPassword = await argon2.hash(password);
+        }
 
         const updateFields: { [key: string]: any } = {};
 
         if(name) updateFields.name = name;
         if (email) updateFields.email = email;
-        if (password) updateFields.password = password;
+        if (password) updateFields.password = hashedPassword;
         if (phoneNumber) updateFields.phoneNumber = phoneNumber;
         if (roleId !== undefined) updateFields.roleId = roleId || null;
         if (status) updateFields.status = status;

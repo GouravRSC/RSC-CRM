@@ -4,6 +4,8 @@ import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import { generateAccessToken, generateRefreshToken } from "../utils/token.util";
 import { sanitizeUser } from "../helper/sanitizeUser";
+import redis from "../database/redis";
+import { passwordSchema } from "../validation/userSchema.validation";
 
 export const SignIn = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
@@ -68,17 +70,12 @@ export const SignIn = async (req:Request,res:Response) => {
             ]
         )
 
-
-
-
         return res.status(200).json({
             success: true,
             user : sanitizeUser(user),
             accessToken,
             refreshToken,
         });
-
-
     }catch(error){
         console.log("Error in Auth Controller SignIn ",error);
         res.status(500).json({
@@ -125,9 +122,57 @@ export const logout = async (req: Request, res: Response) => {
         ]);
 
         return res.status(200).json({ success: true, message: "Logged out successfully" });
-
     } catch (err: any) {
         return res.status(500).json({ success: false, message: err.message });
+    } finally {
+        if (conn) conn.release();
+    }
+};
+
+
+
+export const changeUserPassword = async (req: Request, res: Response) => {
+    const conn = await connection.getConnection();
+    try {
+        const { id } = req.params;
+
+        // Parse the whole body as password
+        const parseResult = passwordSchema.safeParse(req.body.newPassword);
+
+        if (!parseResult.success) {
+            return res.status(400).json({
+                success: false,
+                errors: parseResult.error.flatten().fieldErrors,
+            });
+        }
+
+        const newPassword = parseResult.data!;
+        const hashedPassword = await argon2.hash(newPassword);
+
+        const [result]: any = await conn.query(
+            `UPDATE users SET password = ? WHERE id = ?`,
+            [hashedPassword, id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        await redis.del("All-Users");
+
+        return res.status(200).json({
+            success: true,
+            message: "Password updated successfully.",
+        });
+
+    } catch (error: any) {
+        return res.status(500).json({
+            success: false,
+            message: `Error updating password: ${error.message}`,
+        });
     } finally {
         if (conn) conn.release();
     }
