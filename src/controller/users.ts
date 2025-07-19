@@ -343,7 +343,7 @@ export const deleteUser = async (req:Request,res:Response) => {
         if (userCountRows[0].count === 0) {
             return res.status(404).json({
                 success: false,
-                message: "User Not Found With The Given ID",
+                message: "User Not Found.",
             });
         }
 
