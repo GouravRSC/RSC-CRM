@@ -11,55 +11,58 @@ export const getRoles = async (req:Request,res:Response) =>  {
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
         const search = (req.query.search as string) || "";
-
+        const keyword = search.toLowerCase();
         const offset = (page - 1) * limit;
 
+        // Get the current version of roles
+        const versionKey = "Roles:version";
+        let version = await redis.get(versionKey);
+
+        if(!version){
+            version = "1";
+            await redis.set(versionKey, version);
+        }
+
         // Redis Key with query fingerprint
-        const cacheKey = `Roles:page=${page}:limit=${limit}:search=${search}`;
+        const cacheKey = `Roles:v${version}:page=${page}:limit=${limit}:search=${keyword}`;
 
-        const cachedRoles = await redis.get(cacheKey)
+        const cachedData = await redis.get(cacheKey);
 
-        if(cachedRoles){
+        if(cachedData){
             return res.status(200).json({
                 message : "Roles Fetched Successfully",
-                data : JSON.parse(cachedRoles)
+                data : JSON.parse(cachedData)
             })
         }
 
-        // Get paginated roles with search
-        const [roles]: any = await conn.query(
-            `SELECT * FROM role WHERE roleType LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?`,
-            [`%${search}%`, limit, offset]
-        );
+        const [roles, countResult] : [any[],any[]] = await Promise.all([
+            conn.query(
+                `SELECT * FROM role WHERE LOWER(roleType) LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+                [`%${keyword}%`, limit, offset]
+            ),
+            conn.query(
+                `SELECT COUNT(*) as total FROM role WHERE LOWER(roleType) LIKE ?`,
+                [`%${keyword}%`]
+            ),
+        ]);
 
-
-        const [countRows]: any = await conn.query(
-            `SELECT COUNT(*) as total FROM role WHERE roleType LIKE ?`,
-            [`%${search}%`]
-        );
-
-        const total = countRows[0].total;
+        const total = countResult[0]?.total || 0;
 
         const totalPages = Math.ceil(total / limit);
 
-
-        const responseData = {
+        const result = {
+            page,
+            limit,
+            totalPages,
+            total,
             roles,
-            pagination: {
-                total,
-                totalPages,
-                currentPage: page,
-                limit
-            }
         };
 
-        await redis.set(cacheKey,JSON.stringify(responseData), "EX" ,60*60*24*7)
+        await redis.set(cacheKey,JSON.stringify(result), "EX" ,60 * 5)
 
         return res.status(200).json({
-            message : roles.length === 0 
-                ? "No Roles Found" 
-                : "Roles Fetched Successfully",
-            data : responseData
+            message : roles.length === 0 ? "No Roles Found" : "Roles Fetched Successfully",
+            data : result
         })      
     }catch(error){
         return res.status(500).json({
@@ -129,8 +132,8 @@ export const addRoles = async (req:Request,res:Response) => {
             [roleType]
         )
 
-        //delete the All-Roles from redis
-        await redis.del('All-Roles')
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Roles:version");
 
         return res.status(200).json({
             message : 'Roles Added Successfully',
@@ -185,14 +188,13 @@ export const updateRole = async (req:Request,res:Response) => {
             });
         }
 
-        //delete the All-Roles from redis
-        await redis.del('All-Roles')
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Roles:version");
 
         return res.status(200).json({
             message : 'Role Updated Successfully',
             success : true
         })
-
     }
     catch(error){
         return res.status(500).json({
@@ -239,15 +241,13 @@ export const deleteRole = async (req:Request,res:Response) => {
             })
         }
 
-        //delete the All-Roles from redis
-        await redis.del('All-Roles')
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Roles:version");
 
         return res.status(200).json({
             success: true,
             message: `Role Deleted Successfully. ${affectedUsers} User(s) Now Have No Role.`,
         })
-
-
     }catch(error){
         return res.status(500).json({
             message : `Error Regarding Delete Role : ${error}`,
