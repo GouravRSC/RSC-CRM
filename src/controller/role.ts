@@ -7,7 +7,17 @@ import { roleSchema } from '../validation/roleShema.validation';
 export const getRoles = async (req:Request,res:Response) =>  {
     const conn = await connection.getConnection();
     try{
-        const cachedRoles = await redis.get('All-Roles')
+        // Query params
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 10;
+        const search = (req.query.search as string) || "";
+
+        const offset = (page - 1) * limit;
+
+        // Redis Key with query fingerprint
+        const cacheKey = `Roles:page=${page}:limit=${limit}:search=${search}`;
+
+        const cachedRoles = await redis.get(cacheKey)
 
         if(cachedRoles){
             return res.status(200).json({
@@ -16,24 +26,41 @@ export const getRoles = async (req:Request,res:Response) =>  {
             })
         }
 
+        // Get paginated roles with search
+        const [roles]: any = await conn.query(
+            `SELECT * FROM role WHERE roleType LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+            [`%${search}%`, limit, offset]
+        );
 
-        const [rows] : any = await conn.query(`
-            SELECT * from role
-        `)
 
-        if(rows.length === 0){
-            return res.status(404).json({
-                message : 'No Roles Found',
-            })
-        }
+        const [countRows]: any = await conn.query(
+            `SELECT COUNT(*) as total FROM role WHERE roleType LIKE ?`,
+            [`%${search}%`]
+        );
 
-        await redis.set('All-Roles',JSON.stringify(rows),"EX",60*60*24*30)
+        const total = countRows[0].total;
+
+        const totalPages = Math.ceil(total / limit);
+
+
+        const responseData = {
+            roles,
+            pagination: {
+                total,
+                totalPages,
+                currentPage: page,
+                limit
+            }
+        };
+
+        await redis.set(cacheKey,JSON.stringify(responseData), "EX" ,60*60*24*7)
 
         return res.status(200).json({
-            message : 'Roles Fetched Successfully',
-            data : rows
-        })
-        
+            message : roles.length === 0 
+                ? "No Roles Found" 
+                : "Roles Fetched Successfully",
+            data : responseData
+        })      
     }catch(error){
         return res.status(500).json({
             message : `Error Regarding Getting The Roles : ${error}`,

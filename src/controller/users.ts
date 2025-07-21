@@ -7,7 +7,6 @@ import { v2 as cloudinary } from "cloudinary";
 import argon2 from 'argon2';
 import { UserImageQueue } from "../queues/UserImage.Queue";
 
-// PAGINATION PENDING ----> 1. getAllUsers  2. getUsers via pagination to display on frontend    3. getUserById
 export const getAllUsers = async(req:Request,res:Response) => {
     const conn = await connection.getConnection();
     try{
