@@ -4,6 +4,7 @@ import redis from '../database/redis';
 import { roleSchema } from '../validation/roleShema.validation';
 
 
+
 export const getRoles = async (req:Request,res:Response) =>  {
     const conn = await connection.getConnection();
     try{
@@ -35,9 +36,9 @@ export const getRoles = async (req:Request,res:Response) =>  {
             })
         }
 
-        const [roles, countResult] : [any[],any[]] = await Promise.all([
+        const [[roleRows], [countRows]]: any = await Promise.all([
             conn.query(
-                `SELECT * FROM role WHERE LOWER(roleType) LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+                `SELECT * FROM role WHERE LOWER(roleType) LIKE ? ORDER BY id ASC LIMIT ? OFFSET ?`,
                 [`%${keyword}%`, limit, offset]
             ),
             conn.query(
@@ -46,8 +47,8 @@ export const getRoles = async (req:Request,res:Response) =>  {
             ),
         ]);
 
-        const total = countResult[0]?.total || 0;
 
+        const total = countRows[0]?.total || 0;
         const totalPages = Math.ceil(total / limit);
 
         const result = {
@@ -55,13 +56,13 @@ export const getRoles = async (req:Request,res:Response) =>  {
             limit,
             totalPages,
             total,
-            roles,
+            roles : roleRows,
         };
 
         await redis.set(cacheKey,JSON.stringify(result), "EX" ,60 * 5)
 
         return res.status(200).json({
-            message : roles.length === 0 ? "No Roles Found" : "Roles Fetched Successfully",
+            message : roleRows.length === 0 ? "No Roles Found" : "Roles Fetched Successfully",
             data : result
         })      
     }catch(error){
