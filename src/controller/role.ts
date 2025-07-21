@@ -11,7 +11,7 @@ export const getRoles = async (req:Request,res:Response) =>  {
 
         if(cachedRoles){
             return res.status(200).json({
-                message : "Roles Are Coming From Redis Database",
+                message : "Roles Fetched Successfully",
                 data : JSON.parse(cachedRoles)
             })
         }
@@ -22,8 +22,8 @@ export const getRoles = async (req:Request,res:Response) =>  {
         `)
 
         if(rows.length === 0){
-            return res.status(200).json({
-                message : 'Ask Admin To Create Roles'
+            return res.status(404).json({
+                message : 'No Roles Found',
             })
         }
 
@@ -36,7 +36,7 @@ export const getRoles = async (req:Request,res:Response) =>  {
         
     }catch(error){
         return res.status(500).json({
-            message : `Error Regarding Getting The Roles Inside Role Controller : ${error}`,
+            message : `Error Regarding Getting The Roles : ${error}`,
             success : false
         })
     }finally {
@@ -62,7 +62,7 @@ export const getRoleById = async (req: Request, res: Response) => {
         if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: "No Role Found With This ID",
+                message: "No Role Found",
             });
         }
 
@@ -74,7 +74,7 @@ export const getRoleById = async (req: Request, res: Response) => {
     } catch (error) {
         return res.status(500).json({
             success: false,
-            message: `Error Regarding Getting The Role Via ID : ${error}`,
+            message: `Error Regarding Getting The Role : ${error}`,
         });
     }finally {
         if (conn) conn.release(); // ✅ always release connection
@@ -154,7 +154,7 @@ export const updateRole = async (req:Request,res:Response) => {
         if ((result as any).affectedRows === 0) {
             return res.status(404).json({
                 success: false,
-                message: "Invalid ID: No Role Found With This ID",
+                message: "No Role Found",
             });
         }
 
@@ -208,7 +208,7 @@ export const deleteRole = async (req:Request,res:Response) => {
         if((result as any).affectedRows === 0){
             return res.status(404).json({
                 success: false,
-                message: "Invalid ID: No Role Found With This ID",
+                message: "No Role Found",
             })
         }
 
