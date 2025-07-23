@@ -47,6 +47,17 @@ export const refreshAccessTokenHandler = async (req: Request, res: Response) => 
             roleId: decoded.roleId,
         };
 
+        // Extract old access token from Authorization header
+        const oldAccessToken = req.headers.authorization?.split(" ")[1];
+
+        // Blacklist old access token
+        if (oldAccessToken) {
+            await conn.query(
+                "INSERT INTO blacklisted_tokens (token, expiresAt) VALUES (?, ?)",
+                [oldAccessToken, getTokenExpiry(oldAccessToken)]
+            );
+        }
+
         const newAccessToken = generateAccessToken(userPayload);
         const newRefreshToken = generateRefreshToken(userPayload);
 
@@ -73,4 +84,10 @@ export const refreshAccessTokenHandler = async (req: Request, res: Response) => 
     } finally {
         if (conn) conn.release();
     }
+};
+
+
+export const getTokenExpiry = (token: string): Date => {
+  const { exp } = jwt.decode(token) as any;
+  return new Date(exp * 1000); // Convert seconds to ms
 };
