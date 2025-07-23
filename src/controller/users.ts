@@ -6,35 +6,112 @@ import { uploadToCloudinary } from "../services/cloudinary.service";
 import { v2 as cloudinary } from "cloudinary";
 import argon2 from 'argon2';
 import { UserImageQueue } from "../queues/UserImage.Queue";
+import { decrypt, encrypt } from "../utils/passwordEncryption";
+
 
 export const getAllUsers = async(req:Request,res:Response) => {
     const conn = await connection.getConnection();
     try{
-        const cachedUsers = await redis.get("All-Users")
+        // Query params
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 10;
+        const search = (req.query.search as string) || "";
+        const keyword = `%${search.toLowerCase()}%`;
+        const offset = (page - 1) * limit;
+
+        // Get the current version of users
+        const versionKey = "Users:version";
+        let version = await redis.get(versionKey);
+
+        if(!version){
+            version = "1";
+            await redis.set(versionKey, version);
+        }
+
+        // Redis Key with query fingerprint
+        const cacheKey = `Users:v${version}:page=${page}:limit=${limit}:search=${search}`;
+
+        const cachedUsers = await redis.get(cacheKey)
 
         if(cachedUsers){
             return res.status(200).json({
-                message:"Users Are Coming From Redis Database",
+                message:"Users Fetched Successfully",
                 data : JSON.parse(cachedUsers)
             })
         }
 
-        const [rows] : any = await conn.query(
-            `SELECT id, name, email, phoneNumber, roleId, status, profileImage FROM users`
-        )
+        const [users]: any = await conn.query(
+            `SELECT 
+                u.id, u.name, u.email, u.password, u.phoneNumber, 
+                u.roleId, r.roleType, u.status, u.profileImage, 
+                DATE_FORMAT(u.registerDate, '%Y-%m-%d') as registerDate,
+                DATE_FORMAT(u.dateOfBirth, '%Y-%m-%d') as dateOfBirth
+            FROM users u
+            LEFT JOIN role r ON u.roleId = r.id
+            WHERE 
+                LOWER(u.name) LIKE ? OR
+                LOWER(u.email) LIKE ? OR
+                u.phoneNumber LIKE ? OR
+                LOWER(u.status) LIKE ? OR
+                LOWER(r.roleType) LIKE ? OR
+                DATE_FORMAT(u.registerDate, '%Y-%m-%d') LIKE ? OR
+                CAST(u.id AS CHAR) LIKE ? OR
+                LOWER(u.password) LIKE ?
+            ORDER BY u.id DESC
+            LIMIT ? OFFSET ?`,
+            [keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword, limit, offset]
+        );
 
-        if(rows.length === 0){
-            return res.status(200).json({
-                message : 'Ask Admin To Create Users'
-            })
+        if (users.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "No Users Found",
+            });
         }
 
-        await redis.set('All-Users',JSON.stringify(rows),'EX',30*60*60*24)
+        const [countResult]: any = await conn.query(
+            `SELECT COUNT(*) AS total
+             FROM users u
+             LEFT JOIN role r ON u.roleId = r.id
+             WHERE 
+                LOWER(u.name) LIKE ? OR
+                LOWER(u.email) LIKE ? OR
+                u.phoneNumber LIKE ? OR
+                LOWER(u.status) LIKE ? OR
+                LOWER(r.roleType) LIKE ? OR
+                DATE_FORMAT(u.registerDate, '%Y-%m-%d') LIKE ? OR
+                CAST(u.id AS CHAR) LIKE ? OR
+                LOWER(u.password) LIKE ?`,
+            [keyword, keyword, keyword, keyword, keyword, keyword, keyword, keyword]
+        );
+
+        // 🔓 Decrypt password before sending to frontend
+        const decryptedUsers = users.map((user: any) => ({
+            ...user,
+            password: decrypt(user.password), // 🔓 custom decrypt function
+        }));
+
+        const total = countResult[0].total;
+        const totalPages = Math.ceil(total / limit);
+        
+        const response = {
+            success: true,
+            message: "Users Fetched Successfully",
+            data: decryptedUsers,
+            pagination: {
+                total,
+                totalPages,
+                currentPage: page,
+                limit,
+            },
+        };
+
+        await redis.set(cacheKey,JSON.stringify(response),'EX',60 * 5)
 
         return res.status(200).json({
             success: true,
             message:"Users Fetched Successfully",
-            data : rows
+            data : response
         })
         
     }catch(error){
@@ -54,34 +131,61 @@ export const getUserById = async (req: Request, res: Response) => {
         const { id } = req.params;
 
         const [rows]: any = await conn.query(
-            `SELECT id, name, email, phoneNumber, roleId, status, profileImage 
-             FROM users WHERE id = ? LIMIT 1`,
+            `SELECT 
+                users.id, 
+                users.name, 
+                users.email, 
+                users.phoneNumber, 
+                role.roleType AS role, 
+                users.status, 
+                users.profileImage,
+                users.password,
+                DATE_FORMAT(users.registerDate, '%Y-%m-%d') AS registerDate,
+                DATE_FORMAT(users.dateOfBirth, '%Y-%m-%d') AS dateOfBirth
+            FROM users
+            LEFT JOIN role ON users.roleId = role.id
+            WHERE users.id = ? 
+            LIMIT 1`,
             [id]
         );
 
         if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: "User not found",
+                message: "User Not Found",
             });
         }
+
+        const user = rows[0]
+
+        // 🔐 Decrypt password (tumhara likha hua helper use karte hue)
+        const decryptedPassword = decrypt(user.password);
 
         return res.status(200).json({
             success: true,
             message: "User fetched successfully",
-            data: rows[0],
+            data: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                phoneNumber: user.phoneNumber,
+                role: user.role,
+                status: user.status,
+                profileImage: user.profileImage,
+                password: decryptedPassword,
+                registerDate: user.registerDate,
+                dateOfBirth: user.dateOfBirth,
+            },
         });
-
     } catch (error: any) {
         return res.status(500).json({
             success: false,
-            message: `Error fetching user: ${error.message}`,
+            message: `Error Fetching User: ${error.message}`,
         });
     } finally {
         if (conn) conn.release();
     }
 };
-
 
 
 export const addUser = async (req:Request,res:Response) => {
@@ -97,9 +201,16 @@ export const addUser = async (req:Request,res:Response) => {
             })
         }
 
-        const {name,email,password,phoneNumber} = parsed.data;
+        const {name,email,password,phoneNumber,registerDate,dateOfBirth } = parsed.data;
 
         const {roleId,status} = req.body;
+
+        if (!roleId || !status) {
+            return res.status(400).json({
+                success: false,
+                message: "roleId and status are required fields.",
+            });
+        }
 
         const [existingUserResult, roleCheckResult] = await Promise.all([
             conn.query("SELECT 1 FROM users WHERE email = ? LIMIT 1", [email]),
@@ -114,14 +225,14 @@ export const addUser = async (req:Request,res:Response) => {
         if (existingUser.length > 0) {
             return res.status(400).json({
                 success: false,
-                message: "Email already exists. Please login.",
+                message: "Email Already Exists. Please Login.",
             });
         }        
 
         if (roleCheck.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid roleId: Role with id ${roleId} does not exist.`,
+                message: `Invalid Role.`,
             });
         }
      
@@ -143,22 +254,28 @@ export const addUser = async (req:Request,res:Response) => {
             });
         }
 
-        const hashedPassword = await argon2.hash(password);
+        const encryptedPassword = encrypt(password);
 
         // Default Image Fallback
         let profileImageUrl = "";
 
-        const [result] : any = await conn.query(
-            `INSERT INTO users (name, email, password, phoneNumber, roleId, status, profileImage)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        console.log("register Date: ",registerDate);
+        console.log("date of birth: ",dateOfBirth)
+
+        const [result]: any = await conn.query(
+            `INSERT INTO users 
+            (name, email, password, phoneNumber, roleId, status, profileImage, registerDate, dateOfBirth)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 email,
-                hashedPassword,
+                encryptedPassword,
                 phoneNumber,
                 roleId || null,
-                finalStatus || "active",
+                finalStatus,
                 profileImageUrl,
+                registerDate || new Date(), // Default: now
+                dateOfBirth || null,
             ]
         );
 
@@ -180,7 +297,8 @@ export const addUser = async (req:Request,res:Response) => {
             });
         }
 
-        await redis.del('All-Users')
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Users:version");
 
         return res.status(200).json({
             success: true,
@@ -231,22 +349,17 @@ export const updateUser = async (req:Request,res:Response) => {
             })
         }
 
-        const {name,email,password,phoneNumber} = parsed.data;
+        const {name,email,password,phoneNumber,registerDate, dateOfBirth} = parsed.data;
 
         const {roleId,status} = req.body;
-
-        let profileImage : string | null = null;
 
         const [userRows] : any = await conn.query(
             `SELECT profileImage FROM users WHERE id = ?`,
             [id]
         )
 
-        let oldImageUrl : string | null = null
-
-        if(userRows){
-            oldImageUrl = userRows[0].profileImage
-        }
+        let oldImageUrl : string | null = userRows?.[0]?.profileImage || null
+        let profileImage : string | null = oldImageUrl
 
         if(req.file){
             profileImage = await uploadToCloudinary(req.file.buffer)
@@ -257,26 +370,26 @@ export const updateUser = async (req:Request,res:Response) => {
                     await cloudinary.uploader.destroy(publicId);
                 }
             }
-        }else{
-            profileImage = oldImageUrl;
-        } 
+        }
 
 
-        // Hash password only if provided
-        let hashedPassword: string | undefined;
+        // 🔐 Encrypt password if provided
+        let encryptedPassword: string | undefined;
         if (password) {
-            hashedPassword = await argon2.hash(password);
+            encryptedPassword = encrypt(password);
         }
 
         const updateFields: { [key: string]: any } = {};
 
         if(name) updateFields.name = name;
         if (email) updateFields.email = email;
-        if (password) updateFields.password = hashedPassword;
+        if (password) updateFields.password = encryptedPassword;
         if (phoneNumber) updateFields.phoneNumber = phoneNumber;
         if (roleId !== undefined) updateFields.roleId = roleId || null;
         if (status) updateFields.status = status;
         if (profileImage) updateFields.profileImage = profileImage;
+        if (registerDate) updateFields.registerDate = registerDate;
+        if (dateOfBirth) updateFields.dateOfBirth = dateOfBirth;
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({
@@ -298,14 +411,14 @@ export const updateUser = async (req:Request,res:Response) => {
         const [result] = await conn.query(updateSQL,values);
 
         if ((result as any).affectedRows === 0) {
-            return res.status(404).json({
+            return res.status(400).json({
                 success: false,
-                message: "No Fields Provided For Update",
+                message: "User Not Updated",
             });
         }
 
-        await redis.del("All-Users");
-
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Users:version");
 
         return res.status(200).json({
             success: true,
@@ -325,24 +438,11 @@ export const updateUser = async (req:Request,res:Response) => {
 export const deleteUser = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
     try{
-        const {id} = req.params
-
-        if(!id){
-            return res.status(404).json({
-                success : false,
-                message : "Error: ID Is Required"
-            })
-        }
-
-        const [userCountRows]: any = await conn.query(
-            `SELECT COUNT(*) AS count FROM users WHERE id = ?`,
-            [id]
-        );
-
-        if (userCountRows[0].count === 0) {
-            return res.status(404).json({
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id)) {
+            return res.status(400).json({
                 success: false,
-                message: "User Not Found.",
+                message: "Invalid ID format",
             });
         }
 
@@ -356,11 +456,12 @@ export const deleteUser = async (req:Request,res:Response) => {
         if((result as any).affectedRows === 0){
             return res.status(404).json({
                 success: false,
-                message: "Invalid ID: No User Found With This ID",
+                message: "User Not Found",
             })
         }
 
-        await redis.del("All-Users")
+        // 🔁 Invalidate version-based cache
+        await redis.incr("Users:version");
 
         return res.status(200).json({
             success: true,

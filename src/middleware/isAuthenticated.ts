@@ -16,6 +16,7 @@ export const isAuthenticated = async (req: Request, res: Response, next: NextFun
     try {
         // 1. Check if token is blacklisted
         const conn = await connection.getConnection();
+
         const [rows]: any = await conn.query(
             "SELECT * FROM blacklisted_tokens WHERE token = ? AND expiresAt > NOW()",
             [token]
@@ -32,8 +33,16 @@ export const isAuthenticated = async (req: Request, res: Response, next: NextFun
         (req as any).user = decoded;
 
         next();
-    } catch (err) {
-        return res.status(401).json({ success: false, message: "Invalid or expired token" });
+    } catch (err:any) {
+
+        if (err.name === "TokenExpiredError") {
+            return res.status(401).json({
+                success: false,
+                message: "Access token expired. Please login again.",
+            });
+        }
+
+        return res.status(401).json({ success: false, message: "Invalid token" });
     }
 };
 

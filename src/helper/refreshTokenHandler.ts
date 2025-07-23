@@ -12,7 +12,16 @@ export const refreshAccessTokenHandler = async (req: Request, res: Response) => 
     const conn = await connection.getConnection();
 
     try {
-        const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET as string) as any;
+
+        // 1. Detect reuse first (security check)
+        const [reuseCheck]: any = await conn.query(
+            "SELECT * FROM refresh_tokens WHERE token = ? AND isValid = FALSE LIMIT 1",
+            [refreshToken]
+        );
+
+        if (reuseCheck.length > 0) {
+            return res.status(403).json({ success: false, message: "Token Reuse Detected. Please Login Again." });
+        }
 
         const [rows]: any = await conn.query(
             "SELECT * FROM refresh_tokens WHERE token = ? AND isValid = TRUE LIMIT 1",
@@ -20,6 +29,14 @@ export const refreshAccessTokenHandler = async (req: Request, res: Response) => 
         );
 
         if (rows.length === 0) return res.status(403).json({ success: false, message: "Token invalid or blacklisted" });
+
+        // 3. Verify token signature & expiration
+        let decoded;
+        try {
+            decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET as string) as any;
+        } catch (err) {
+            return res.status(401).json({ success: false, message: "Invalid Or Expired Refresh Token" });
+        }
 
         // Rotate: invalidate old refresh token
         await conn.query("UPDATE refresh_tokens SET isValid = FALSE WHERE token = ?", [refreshToken]);

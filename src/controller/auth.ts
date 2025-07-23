@@ -6,6 +6,7 @@ import { generateAccessToken, generateRefreshToken } from "../utils/token.util";
 import { sanitizeUser } from "../helper/sanitizeUser";
 import redis from "../database/redis";
 import { passwordSchema } from "../validation/userSchema.validation";
+import { decrypt } from "../utils/passwordEncryption";
 
 export const SignIn = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
@@ -31,18 +32,18 @@ export const SignIn = async (req:Request,res:Response) => {
 
         const user = rows[0];
 
-        const isPasswordMatch = await argon2.verify(user.password,password);
-
-        if(!isPasswordMatch){
+        // 👇 Decrypt stored password and compare
+        const decryptedPassword = decrypt(user.password);
+        if (decryptedPassword !== password) {
             return res.status(401).json({
-                message : "Invalid Credentials"
-            })
+                message: "Invalid Credentials"
+            });
         }
 
         //check if user is active or not
         if(user.status !== "active"){
             return res.status(403).json({
-                message : "User Account Is Not Active.Please Contact Admin"
+                message : "Your Account Is Not Active."
             })
         }
 
