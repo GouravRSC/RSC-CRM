@@ -6,7 +6,7 @@ import { generateAccessToken, generateRefreshToken } from "../utils/token.util";
 import { sanitizeUser } from "../helper/sanitizeUser";
 import redis from "../database/redis";
 import { passwordSchema } from "../validation/userSchema.validation";
-import { decrypt } from "../utils/passwordEncryption";
+import { decrypt, encrypt } from "../utils/passwordEncryption";
 
 export const SignIn = async (req:Request,res:Response) => {
     const conn = await connection.getConnection();
@@ -148,11 +148,11 @@ export const changeUserPassword = async (req: Request, res: Response) => {
         }
 
         const newPassword = parseResult.data!;
-        const hashedPassword = await argon2.hash(newPassword);
+        const encryptedPassword = encrypt(newPassword);
 
         const [result]: any = await conn.query(
             `UPDATE users SET password = ? WHERE id = ?`,
-            [hashedPassword, id]
+            [encryptedPassword, id]
         );
 
         if (result.affectedRows === 0) {
